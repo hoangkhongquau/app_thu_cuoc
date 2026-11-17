@@ -97,8 +97,7 @@ class DbHelper {
   }
 
   // Đọc và gộp thông minh dữ liệu từ file CSV
-  static Future<int> importCsvFile(File file) async {
-    final content = await file.readAsString(encoding: utf8);
+  static Future<int> importCsvContent(String content) async {
     final rows = const CsvToListConverter(eol: '\n', shouldParseNumbers: false)
         .convert(content.replaceAll('\r\n', '\n'));
     if (rows.length < 2) return 0;
@@ -360,13 +359,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _pickAndImportCsv() async {
-    final result = await FilePicker.platform.pickFiles(
+    final result = await FilePicker.pickFile(
       type: FileType.custom,
       allowedExtensions: ['csv'],
     );
-    if (result != null && result.files.single.path != null) {
-      final file = File(result.files.single.path!);
-      final count = await DbHelper.importCsvFile(file);
+    if (result != null) {
+      final content = utf8.decode(await result.readAsBytes());
+      final count = await DbHelper.importCsvContent(content);
       await _loadData();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -429,7 +428,12 @@ class _HomeScreenState extends State<HomeScreen> {
     final path = p.join(dir.path, 'Ket_Qua_Thu_Cuoc.csv');
     final file = File(path);
     await file.writeAsString('\uFEFF$csvData', encoding: utf8);
-    await Share.shareXFiles([XFile(path)], text: 'Báo cáo kết quả thu cước');
+    await SharePlus.instance.share(
+      ShareParams(
+        files: [XFile(path)],
+        text: 'Báo cáo kết quả thu cước',
+      ),
+    );
   }
 
   @override
