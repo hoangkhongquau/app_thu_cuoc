@@ -1,16 +1,20 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'dart:io';
 import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:material_ui/material_ui.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:flutter/material.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  if (Platform.isWindows || Platform.isLinux) {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  }
   runApp(const ThuCuocApp());
 }
 
@@ -98,12 +102,16 @@ class DbHelper {
 
   // Đọc và gộp thông minh dữ liệu từ file CSV
   static Future<int> importCsvContent(String content) async {
-    final rows = const CsvToListConverter(eol: '\n', shouldParseNumbers: false)
-        .convert(content.replaceAll('\r\n', '\n'));
+    final rows = const CsvToListConverter(
+      eol: '\n',
+      shouldParseNumbers: false,
+    ).convert(content.replaceAll('\r\n', '\n'));
     if (rows.length < 2) return 0;
 
     final headers = rows.first.map((e) => e.toString().trim()).toList();
-    int idxMa = headers.indexWhere((h) => h.contains('Số thuê bao') || h.contains('Mã Account'));
+    int idxMa = headers.indexWhere(
+      (h) => h.contains('Số thuê bao') || h.contains('Mã Account'),
+    );
     int idxTen = headers.indexWhere((h) => h.contains('Họ và tên'));
     int idxDiaChi = headers.indexWhere((h) => h.contains('Địa chỉ'));
     int idxSdt = headers.indexWhere((h) => h.contains('Số điện thoại'));
@@ -112,15 +120,30 @@ class DbHelper {
     int idxToThu = headers.indexWhere((h) => h == 'Tổ thu');
     int idxChan = headers.indexWhere((h) => h.contains('Dự kiến chặn'));
     int idxHinhThuc = headers.indexWhere((h) => h.contains('Hinh Thuc'));
-    int idxGhiChu = headers.indexWhere((h) => h.contains('Ghi Chu') || h.contains('Ghi chú'));
+    int idxGhiChu = headers.indexWhere(
+      (h) => h.contains('Ghi Chu') || h.contains('Ghi chú'),
+    );
     int idxCot1 = headers.indexWhere((h) => h == '1');
 
     if (idxMa == -1) return 0;
 
     final database = await db;
-    final existingRows = await database.query('khach_hang');
+    final existingRows = await database.query(
+      'khach_hang',
+      columns: [
+        'ma_tb',
+        'ho_ten',
+        'dia_chi',
+        'sdt',
+        'dich_vu',
+        'to_thu_goc',
+        'hinh_thuc',
+        'ghi_chu',
+        'trang_thai',
+      ],
+    );
     final Map<String, Map<String, dynamic>> existingMap = {
-      for (var r in existingRows) r['ma_tb'].toString(): r
+      for (var r in existingRows) r['ma_tb'].toString(): r,
     };
 
     int count = 0;
@@ -134,16 +157,28 @@ class DbHelper {
 
       final old = existingMap[maTb];
 
-      String hoTen = idxTen != -1 && r.length > idxTen ? r[idxTen].toString().trim() : (old?['ho_ten'] ?? '');
-      String diaChi = idxDiaChi != -1 && r.length > idxDiaChi ? r[idxDiaChi].toString().trim() : (old?['dia_chi'] ?? '');
-      String sdtRaw = idxSdt != -1 && r.length > idxSdt ? r[idxSdt].toString() : '';
+      String hoTen = idxTen != -1 && r.length > idxTen
+          ? r[idxTen].toString().trim()
+          : (old?['ho_ten'] ?? '');
+      String diaChi = idxDiaChi != -1 && r.length > idxDiaChi
+          ? r[idxDiaChi].toString().trim()
+          : (old?['dia_chi'] ?? '');
+      String sdtRaw = idxSdt != -1 && r.length > idxSdt
+          ? r[idxSdt].toString()
+          : '';
       String sdt = cleanPhone(sdtRaw);
       if (sdt.isEmpty && old != null) sdt = old['sdt'] ?? '';
 
-      String dichVu = idxDichVu != -1 && r.length > idxDichVu ? r[idxDichVu].toString().trim() : (old?['dich_vu'] ?? '');
-      String toThuGoc = idxToThu != -1 && r.length > idxToThu ? r[idxToThu].toString().trim() : (old?['to_thu_goc'] ?? '');
+      String dichVu = idxDichVu != -1 && r.length > idxDichVu
+          ? r[idxDichVu].toString().trim()
+          : (old?['dich_vu'] ?? '');
+      String toThuGoc = idxToThu != -1 && r.length > idxToThu
+          ? r[idxToThu].toString().trim()
+          : (old?['to_thu_goc'] ?? '');
       String khuVuc = normalizeArea(toThuGoc);
-      int tonCuoc = idxTonCuoc != -1 && r.length > idxTonCuoc ? cleanAmount(r[idxTonCuoc].toString()) : 0;
+      int tonCuoc = idxTonCuoc != -1 && r.length > idxTonCuoc
+          ? cleanAmount(r[idxTonCuoc].toString())
+          : 0;
 
       String duKienChan = '';
       if (idxChan != -1 && r.length > idxChan) {
@@ -167,7 +202,14 @@ class DbHelper {
           // Nếu là file T9 (Gộp chung Hình thức và Ghi chú vào 1 cột)
           if (idxHinhThuc == -1) {
             String upper = gcMoi.toUpperCase();
-            if (['CK', 'TT', 'TTT', 'HD', 'IN HÓA ĐƠN', 'ACCOUNT MỚI'].contains(upper)) {
+            if ([
+              'CK',
+              'TT',
+              'TTT',
+              'HD',
+              'IN HÓA ĐƠN',
+              'ACCOUNT MỚI',
+            ].contains(upper)) {
               hinhThuc = upper;
             } else if (upper.startsWith('TT ')) {
               hinhThuc = 'TT';
@@ -185,31 +227,27 @@ class DbHelper {
       }
 
       // Kiểm tra cột '1' xem có ghi chú "đã gạch chưa thu" không
-      int trangThai = 0;
+      int trangThai = old?['trang_thai'] ?? 0;
       if (idxCot1 != -1 && r.length > idxCot1) {
         String c1 = r[idxCot1].toString().trim().toLowerCase();
         if (c1.contains('gạch')) trangThai = 3;
       }
 
-      batch.insert(
-        'khach_hang',
-        {
-          'ma_tb': maTb,
-          'ho_ten': hoTen,
-          'dia_chi': diaChi,
-          'sdt': sdt,
-          'dich_vu': dichVu,
-          'to_thu_goc': toThuGoc,
-          'khu_vuc': khuVuc,
-          'hinh_thuc': hinhThuc,
-          'ghi_chu': ghiChu,
-          'ton_cuoc': tonCuoc,
-          'du_kien_chan': duKienChan,
-          'trang_thai': trangThai,
-          'ngay_cap_nhat': '',
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
+      batch.insert('khach_hang', {
+        'ma_tb': maTb,
+        'ho_ten': hoTen,
+        'dia_chi': diaChi,
+        'sdt': sdt,
+        'dich_vu': dichVu,
+        'to_thu_goc': toThuGoc,
+        'khu_vuc': khuVuc,
+        'hinh_thuc': hinhThuc,
+        'ghi_chu': ghiChu,
+        'ton_cuoc': tonCuoc,
+        'du_kien_chan': duKienChan,
+        'trang_thai': trangThai,
+        'ngay_cap_nhat': '',
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
       count++;
     }
 
@@ -233,10 +271,15 @@ class _HomeScreenState extends State<HomeScreen> {
   String _searchQuery = '';
   String _selectedArea = 'Tất cả';
   String _selectedMethod = 'Tất cả';
-  int _selectedStatus = -1; // -1: Tất cả, 0: Chưa thu, 1: Đã thu TM, 2: Đã thu CK, 3: Đã gạch chưa thu, 4: Hẹn lại
+  int _selectedStatus =
+      -1; // -1: Tất cả, 0: Chưa thu, 1: Đã thu TM, 2: Đã thu CK, 3: Đã gạch chưa thu, 4: Hẹn lại
   bool _onlyUrgentBlock = false;
 
-  final currencyFmt = NumberFormat.currency(locale: 'vi_VN', symbol: 'đ', decimalDigits: 0);
+  final currencyFmt = NumberFormat.currency(
+    locale: 'vi_VN',
+    symbol: 'đ',
+    decimalDigits: 0,
+  );
 
   @override
   void initState() {
@@ -247,43 +290,57 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadData() async {
     final database = await DbHelper.db;
     final data = await database.query('khach_hang', orderBy: 'ho_ten ASC');
+    if (!mounted) return;
     setState(() {
       _allData = data;
+      _filteredData = _filterData(data);
     });
-    _applyFilters();
   }
 
-  void _applyFilters() {
+  List<Map<String, dynamic>> _filterData(Iterable<Map<String, dynamic>> data) {
     final q = _searchQuery.toLowerCase().trim();
+    return data.where((item) {
+      if (_selectedArea != 'Tất cả' && item['khu_vuc'] != _selectedArea) {
+        return false;
+      }
+
+      if (_selectedMethod != 'Tất cả') {
+        String ht = (item['hinh_thuc'] ?? '').toString().toUpperCase();
+        if (_selectedMethod == 'Trống' && ht.isNotEmpty) return false;
+        if (_selectedMethod != 'Trống' && ht != _selectedMethod) return false;
+      }
+
+      if (_selectedStatus != -1 && item['trang_thai'] != _selectedStatus) {
+        return false;
+      }
+
+      if (_onlyUrgentBlock) {
+        String chan = (item['du_kien_chan'] ?? '').toString();
+        if (chan.isEmpty) return false;
+      }
+
+      if (q.isNotEmpty) {
+        String ten = (item['ho_ten'] ?? '').toString().toLowerCase();
+        String dc = (item['dia_chi'] ?? '').toString().toLowerCase();
+        String ma = (item['ma_tb'] ?? '').toString().toLowerCase();
+        String sdt = (item['sdt'] ?? '').toString().toLowerCase();
+        String gc = (item['ghi_chu'] ?? '').toString().toLowerCase();
+        if (!ten.contains(q) &&
+            !dc.contains(q) &&
+            !ma.contains(q) &&
+            !sdt.contains(q) &&
+            !gc.contains(q)) {
+          return false;
+        }
+      }
+      return true;
+    }).toList();
+  }
+
+  void _applyFilters([VoidCallback? update]) {
     setState(() {
-      _filteredData = _allData.where((item) {
-        if (_selectedArea != 'Tất cả' && item['khu_vuc'] != _selectedArea) return false;
-
-        if (_selectedMethod != 'Tất cả') {
-          String ht = (item['hinh_thuc'] ?? '').toString().toUpperCase();
-          if (_selectedMethod == 'Trống' && ht.isNotEmpty) return false;
-          if (_selectedMethod != 'Trống' && ht != _selectedMethod) return false;
-        }
-
-        if (_selectedStatus != -1 && item['trang_thai'] != _selectedStatus) return false;
-
-        if (_onlyUrgentBlock) {
-          String chan = (item['du_kien_chan'] ?? '').toString();
-          if (chan.isEmpty) return false;
-        }
-
-        if (q.isNotEmpty) {
-          String ten = (item['ho_ten'] ?? '').toString().toLowerCase();
-          String dc = (item['dia_chi'] ?? '').toString().toLowerCase();
-          String ma = (item['ma_tb'] ?? '').toString().toLowerCase();
-          String sdt = (item['sdt'] ?? '').toString().toLowerCase();
-          String gc = (item['ghi_chu'] ?? '').toString().toLowerCase();
-          if (!ten.contains(q) && !dc.contains(q) && !ma.contains(q) && !sdt.contains(q) && !gc.contains(q)) {
-            return false;
-          }
-        }
-        return true;
-      }).toList();
+      update?.call();
+      _filteredData = _filterData(_allData);
     });
   }
 
@@ -303,59 +360,73 @@ class _HomeScreenState extends State<HomeScreen> {
     String selectedHt = item['hinh_thuc'] ?? '';
     final noteCtrl = TextEditingController(text: item['ghi_chu'] ?? '');
 
-    await showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: Text(item['ho_ten'] ?? item['ma_tb'], style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Hình thức thu cố định:', style: TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                children: ['TT', 'CK', 'TTT', 'IN HÓA ĐƠN', 'HD'].map((ht) {
-                  return ChoiceChip(
-                    label: Text(ht),
-                    selected: selectedHt == ht,
-                    onSelected: (val) => setDialogState(() => selectedHt = val ? ht : ''),
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: noteCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Ghi chú đường đi / Nhắc nhở',
-                  hintText: 'VD: Gần Thu Phượng, Ghé a râu lấy...',
-                  border: OutlineInputBorder(),
+    try {
+      await showDialog(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            title: Text(
+              item['ho_ten'] ?? item['ma_tb'],
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Hình thức thu cố định:',
+                  style: TextStyle(fontWeight: FontWeight.w600),
                 ),
-                maxLines: 2,
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: ['TT', 'CK', 'TTT', 'IN HÓA ĐƠN', 'HD'].map((ht) {
+                    return ChoiceChip(
+                      label: Text(ht),
+                      selected: selectedHt == ht,
+                      onSelected: (val) =>
+                          setDialogState(() => selectedHt = val ? ht : ''),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: noteCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Ghi chú đường đi / Nhắc nhở',
+                    hintText: 'VD: Gần Thu Phượng, Ghé a râu lấy...',
+                    border: OutlineInputBorder(),
+                  ),
+                  maxLines: 2,
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Hủy'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  final database = await DbHelper.db;
+                  await database.update(
+                    'khach_hang',
+                    {'hinh_thuc': selectedHt, 'ghi_chu': noteCtrl.text.trim()},
+                    where: 'ma_tb = ?',
+                    whereArgs: [item['ma_tb']],
+                  );
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  await _loadData();
+                },
+                child: const Text('Lưu lại'),
               ),
             ],
           ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Hủy')),
-            FilledButton(
-              onPressed: () async {
-                final database = await DbHelper.db;
-                await database.update(
-                  'khach_hang',
-                  {'hinh_thuc': selectedHt, 'ghi_chu': noteCtrl.text.trim()},
-                  where: 'ma_tb = ?',
-                  whereArgs: [item['ma_tb']],
-                );
-                if (ctx.mounted) Navigator.pop(ctx);
-                await _loadData();
-              },
-              child: const Text('Lưu lại'),
-            ),
-          ],
         ),
-      ),
-    );
+      );
+    } finally {
+      noteCtrl.dispose();
+    }
   }
 
   Future<void> _pickAndImportCsv() async {
@@ -369,7 +440,9 @@ class _HomeScreenState extends State<HomeScreen> {
       await _loadData();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Đã nạp và đồng bộ thành công $count thuê bao!')),
+          SnackBar(
+            content: Text('Đã nạp và đồng bộ thành công $count thuê bao!'),
+          ),
         );
       }
     }
@@ -388,8 +461,8 @@ class _HomeScreenState extends State<HomeScreen> {
         'Dịch vụ',
         'Tồn cước',
         'Tổ thu',
-        'Dự kiến chặn'
-      ]
+        'Dự kiến chặn',
+      ],
     ];
 
     String statusText(int st) {
@@ -429,10 +502,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final file = File(path);
     await file.writeAsString('\uFEFF$csvData', encoding: utf8);
     await SharePlus.instance.share(
-      ShareParams(
-        files: [XFile(path)],
-        text: 'Báo cáo kết quả thu cước',
-      ),
+      ShareParams(files: [XFile(path)], text: 'Báo cáo kết quả thu cước'),
     );
   }
 
@@ -484,11 +554,23 @@ class _HomeScreenState extends State<HomeScreen> {
             color: Colors.grey.shade100,
             child: Row(
               children: [
-                _buildSummaryBox('Tiền mặt cầm', currencyFmt.format(tongTienMat), Colors.green.shade700),
+                _buildSummaryBox(
+                  'Tiền mặt cầm',
+                  currencyFmt.format(tongTienMat),
+                  Colors.green.shade700,
+                ),
                 const SizedBox(width: 6),
-                _buildSummaryBox('Khách đã CK', currencyFmt.format(tongChuyenKhoan), Colors.blue.shade700),
+                _buildSummaryBox(
+                  'Khách đã CK',
+                  currencyFmt.format(tongChuyenKhoan),
+                  Colors.blue.shade700,
+                ),
                 const SizedBox(width: 6),
-                _buildSummaryBox('Gạch chưa thu', currencyFmt.format(tongDaGachChuaThu), Colors.orange.shade800),
+                _buildSummaryBox(
+                  'Gạch chưa thu',
+                  currencyFmt.format(tongDaGachChuaThu),
+                  Colors.orange.shade800,
+                ),
               ],
             ),
           ),
@@ -498,25 +580,22 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: const EdgeInsets.fromLTRB(10, 6, 10, 4),
             child: TextField(
               decoration: InputDecoration(
-                hintText: 'Tìm tên, số nhà (389), kiệt, ghi chú (a râu, B&H)...',
+                hintText:
+                    'Tìm tên, số nhà (389), kiệt, ghi chú (a râu, B&H)...',
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: _searchQuery.isNotEmpty
                     ? IconButton(
                         icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          setState(() => _searchQuery = '');
-                          _applyFilters();
-                        },
+                        onPressed: () => _applyFilters(() => _searchQuery = ''),
                       )
                     : null,
                 isDense: true,
                 contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
-              onChanged: (val) {
-                _searchQuery = val;
-                _applyFilters();
-              },
+              onChanged: (val) => _applyFilters(() => _searchQuery = val),
             ),
           ),
 
@@ -526,16 +605,20 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 10),
             child: Row(
               children: [
-                for (final area in ['Tất cả', 'An Cư Tân', 'Lập An', 'Loan Lý', 'Khu vực 1'])
+                for (final area in [
+                  'Tất cả',
+                  'An Cư Tân',
+                  'Lập An',
+                  'Loan Lý',
+                  'Khu vực 1',
+                ])
                   Padding(
                     padding: const EdgeInsets.only(right: 6),
                     child: ChoiceChip(
                       label: Text(area, style: const TextStyle(fontSize: 12)),
                       selected: _selectedArea == area,
-                      onSelected: (_) {
-                        setState(() => _selectedArea = area);
-                        _applyFilters();
-                      },
+                      onSelected: (_) =>
+                          _applyFilters(() => _selectedArea = area),
                     ),
                   ),
               ],
@@ -550,22 +633,24 @@ class _HomeScreenState extends State<HomeScreen> {
                   label: const Text('Sắp chặn', style: TextStyle(fontSize: 12)),
                   selectedColor: Colors.red.shade100,
                   selected: _onlyUrgentBlock,
-                  onSelected: (v) {
-                    setState(() => _onlyUrgentBlock = v);
-                    _applyFilters();
-                  },
+                  onSelected: (v) => _applyFilters(() => _onlyUrgentBlock = v),
                 ),
                 const SizedBox(width: 6),
-                for (final method in ['Tất cả', 'TT', 'CK', 'TTT', 'IN HÓA ĐƠN', 'Trống'])
+                for (final method in [
+                  'Tất cả',
+                  'TT',
+                  'CK',
+                  'TTT',
+                  'IN HÓA ĐƠN',
+                  'Trống',
+                ])
                   Padding(
                     padding: const EdgeInsets.only(right: 6),
                     child: ChoiceChip(
                       label: Text(method, style: const TextStyle(fontSize: 12)),
                       selected: _selectedMethod == method,
-                      onSelected: (_) {
-                        setState(() => _selectedMethod = method);
-                        _applyFilters();
-                      },
+                      onSelected: (_) =>
+                          _applyFilters(() => _selectedMethod = method),
                     ),
                   ),
               ],
@@ -603,12 +688,16 @@ class _HomeScreenState extends State<HomeScreen> {
                     itemBuilder: (ctx, idx) {
                       final item = _filteredData[idx];
                       final int st = item['trang_thai'] ?? 0;
-                      final String chan = (item['du_kien_chan'] ?? '').toString();
+                      final String chan = (item['du_kien_chan'] ?? '')
+                          .toString();
                       final String ht = (item['hinh_thuc'] ?? '').toString();
                       final String gc = (item['ghi_chu'] ?? '').toString();
 
                       return Card(
-                        margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        margin: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
                         elevation: 2,
                         child: Padding(
                           padding: const EdgeInsets.all(10),
@@ -616,12 +705,16 @@ class _HomeScreenState extends State<HomeScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
                                   Expanded(
                                     child: Text(
                                       item['ho_ten'] ?? '',
-                                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                      style: const TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                      ),
                                     ),
                                   ),
                                   Text(
@@ -639,35 +732,65 @@ class _HomeScreenState extends State<HomeScreen> {
                                 spacing: 6,
                                 runSpacing: 4,
                                 children: [
-                                  _buildBadge(item['khu_vuc'] ?? '', Colors.blueGrey),
-                                  _buildBadge(item['dich_vu'] ?? '', Colors.indigo),
-                                  if (ht.isNotEmpty) _buildBadge('HT: $ht', Colors.teal.shade700),
-                                  if (chan.isNotEmpty) _buildBadge('Chặn ngày $chan', Colors.red.shade700),
+                                  _buildBadge(
+                                    item['khu_vuc'] ?? '',
+                                    Colors.blueGrey,
+                                  ),
+                                  _buildBadge(
+                                    item['dich_vu'] ?? '',
+                                    Colors.indigo,
+                                  ),
+                                  if (ht.isNotEmpty)
+                                    _buildBadge(
+                                      'HT: $ht',
+                                      Colors.teal.shade700,
+                                    ),
+                                  if (chan.isNotEmpty)
+                                    _buildBadge(
+                                      'Chặn ngày $chan',
+                                      Colors.red.shade700,
+                                    ),
                                   if ((item['sdt'] ?? '').toString().isNotEmpty)
-                                    _buildBadge('SĐT: ${item['sdt']}', Colors.grey.shade800),
+                                    _buildBadge(
+                                      'SĐT: ${item['sdt']}',
+                                      Colors.grey.shade800,
+                                    ),
                                 ],
                               ),
                               const SizedBox(height: 6),
                               Text(
                                 'Đ/c: ${item['dia_chi']}',
-                                style: const TextStyle(fontSize: 13.5, color: Colors.black87),
+                                style: const TextStyle(
+                                  fontSize: 13.5,
+                                  color: Colors.black87,
+                                ),
                               ),
                               if (gc.isNotEmpty)
                                 Container(
                                   margin: const EdgeInsets.only(top: 4),
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: Colors.amber.shade100,
                                     borderRadius: BorderRadius.circular(6),
                                   ),
                                   child: Row(
                                     children: [
-                                      const Icon(Icons.sticky_note_2_outlined, size: 16, color: Colors.brown),
+                                      const Icon(
+                                        Icons.sticky_note_2_outlined,
+                                        size: 16,
+                                        color: Colors.brown,
+                                      ),
                                       const SizedBox(width: 4),
                                       Expanded(
                                         child: Text(
                                           'Ghi chú: $gc',
-                                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                          ),
                                         ),
                                       ),
                                     ],
@@ -676,14 +799,42 @@ class _HomeScreenState extends State<HomeScreen> {
                               const SizedBox(height: 8),
                               // HÀNG NÚT BẤM TRẠNG THÁI 1 CHẠM
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
-                                  _buildActionBtn(item['ma_tb'], 1, st, 'Tiền mặt', Colors.green),
-                                  _buildActionBtn(item['ma_tb'], 2, st, 'Đã CK', Colors.blue),
-                                  _buildActionBtn(item['ma_tb'], 3, st, 'Gạch nợ', Colors.orange.shade800),
-                                  _buildActionBtn(item['ma_tb'], 4, st, 'Hẹn lại', Colors.purple),
+                                  _buildActionBtn(
+                                    item['ma_tb'],
+                                    1,
+                                    st,
+                                    'Tiền mặt',
+                                    Colors.green,
+                                  ),
+                                  _buildActionBtn(
+                                    item['ma_tb'],
+                                    2,
+                                    st,
+                                    'Đã CK',
+                                    Colors.blue,
+                                  ),
+                                  _buildActionBtn(
+                                    item['ma_tb'],
+                                    3,
+                                    st,
+                                    'Gạch nợ',
+                                    Colors.orange.shade800,
+                                  ),
+                                  _buildActionBtn(
+                                    item['ma_tb'],
+                                    4,
+                                    st,
+                                    'Hẹn lại',
+                                    Colors.purple,
+                                  ),
                                   IconButton(
-                                    icon: const Icon(Icons.edit_note, color: Colors.black54),
+                                    icon: const Icon(
+                                      Icons.edit_note,
+                                      color: Colors.black54,
+                                    ),
                                     tooltip: 'Sửa Hình thức / Ghi chú',
                                     onPressed: () => _editNoteAndMethod(item),
                                   ),
@@ -712,9 +863,19 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         child: Column(
           children: [
-            Text(title, style: const TextStyle(fontSize: 11, color: Colors.black54)),
+            Text(
+              title,
+              style: const TextStyle(fontSize: 11, color: Colors.black54),
+            ),
             const SizedBox(height: 2),
-            Text(value, style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: color)),
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 13.5,
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
+            ),
           ],
         ),
       ),
@@ -728,7 +889,14 @@ class _HomeScreenState extends State<HomeScreen> {
         color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(4),
       ),
-      child: Text(text, style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: color)),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 11.5,
+          fontWeight: FontWeight.w600,
+          color: color,
+        ),
+      ),
     );
   }
 
@@ -738,15 +906,18 @@ class _HomeScreenState extends State<HomeScreen> {
       child: ChoiceChip(
         label: Text(label, style: const TextStyle(fontSize: 12)),
         selected: _selectedStatus == statusVal,
-        onSelected: (_) {
-          setState(() => _selectedStatus = statusVal);
-          _applyFilters();
-        },
+        onSelected: (_) => _applyFilters(() => _selectedStatus = statusVal),
       ),
     );
   }
 
-  Widget _buildActionBtn(String maTb, int targetStatus, int currentStatus, String label, Color color) {
+  Widget _buildActionBtn(
+    String maTb,
+    int targetStatus,
+    int currentStatus,
+    String label,
+    Color color,
+  ) {
     final bool isSelected = currentStatus == targetStatus;
     return InkWell(
       onTap: () => _updateStatus(maTb, isSelected ? 0 : targetStatus),
