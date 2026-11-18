@@ -2,12 +2,13 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:csv/csv.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
-import 'package:flutter/material.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -63,7 +64,7 @@ class DbHelper {
             ngay_cap_nhat TEXT
           )
         ''');
-        // trang_thai: 0=Chưa thu, 1=Đã thu TM, 2=Đã thu CK, 3=Đã gạch chưa thu, 4=Hẹn lại
+        // trang_thai: 0=Chưa thu, 1=Đã thu TM, 2=Đã gạch nợ cước, 3=Đã gạch chưa thu, 4=Hẹn lại
       },
     );
     return _db!;
@@ -199,7 +200,6 @@ class DbHelper {
       if (idxGhiChu != -1 && r.length > idxGhiChu) {
         String gcMoi = r[idxGhiChu].toString().trim();
         if (gcMoi.isNotEmpty && !gcMoi.contains('ERROR')) {
-          // Nếu là file T9 (Gộp chung Hình thức và Ghi chú vào 1 cột)
           if (idxHinhThuc == -1) {
             String upper = gcMoi.toUpperCase();
             if ([
@@ -226,7 +226,6 @@ class DbHelper {
         }
       }
 
-      // Kiểm tra cột '1' xem có ghi chú "đã gạch chưa thu" không
       int trangThai = old?['trang_thai'] ?? 0;
       if (idxCot1 != -1 && r.length > idxCot1) {
         String c1 = r[idxCot1].toString().trim().toLowerCase();
@@ -272,7 +271,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String _selectedArea = 'Tất cả';
   String _selectedMethod = 'Tất cả';
   int _selectedStatus =
-      -1; // -1: Tất cả, 0: Chưa thu, 1: Đã thu TM, 2: Đã thu CK, 3: Đã gạch chưa thu, 4: Hẹn lại
+      -1; // -1: Tất cả, 0: Chưa thu, 1: Đã thu TM, 2: Đã gạch nợ cước, 3: Đã gạch chưa thu, 4: Hẹn lại
   bool _onlyUrgentBlock = false;
 
   final currencyFmt = NumberFormat.currency(
@@ -289,7 +288,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _loadData() async {
     final database = await DbHelper.db;
-    final data = await database.query('khach_hang', orderBy: 'ho_ten ASC');
+    final rows = await database.query('khach_hang', orderBy: 'ho_ten ASC');
+    final data = rows
+        .map(
+          (row) => {
+            ...row,
+            '_formatted_ton_cuoc': currencyFmt.format(row['ton_cuoc'] ?? 0),
+          },
+        )
+        .toList(growable: false);
     if (!mounted) return;
     setState(() {
       _allData = data;
@@ -354,6 +361,20 @@ class _HomeScreenState extends State<HomeScreen> {
       whereArgs: [maTb],
     );
     await _loadData();
+  }
+
+  // Hàm sao chép nhanh Mã Account (Số thuê bao) vào bộ nhớ tạm
+  Future<void> _copyAccount(String maTb) async {
+    await Clipboard.setData(ClipboardData(text: maTb));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Đã sao chép Account: $maTb'),
+        duration: const Duration(seconds: 1),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   Future<void> _editNoteAndMethod(Map<String, dynamic> item) async {
@@ -470,7 +491,7 @@ class _HomeScreenState extends State<HomeScreen> {
         case 1:
           return 'Đã thu TM';
         case 2:
-          return 'Đã CK';
+          return 'Đã gạch nợ cước';
         case 3:
           return 'đã gạch chưa thu';
         case 4:
@@ -510,22 +531,21 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     // Tính toán tiền quỹ đối soát
     int tongTienMat = 0;
-    int tongChuyenKhoan = 0;
+    int tongDaGachNoCuoc = 0;
     int tongDaGachChuaThu = 0;
-    int soDaThu = 0;
+    int soDaThuTienMat = 0;
 
     for (var r in _allData) {
       int st = r['trang_thai'] ?? 0;
       int tien = r['ton_cuoc'] ?? 0;
       if (st == 1) {
         tongTienMat += tien;
-        soDaThu++;
       } else if (st == 2) {
-        tongChuyenKhoan += tien;
-        soDaThu++;
+        tongDaGachNoCuoc += tien;
       } else if (st == 3) {
         tongDaGachChuaThu += tien;
       }
+      if (st == 1) soDaThuTienMat++;
     }
 
     return Scaffold(
@@ -561,8 +581,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 const SizedBox(width: 6),
                 _buildSummaryBox(
-                  'Khách đã CK',
-                  currencyFmt.format(tongChuyenKhoan),
+                  'Đã gạch nợ cước',
+                  currencyFmt.format(tongDaGachNoCuoc),
                   Colors.blue.shade700,
                 ),
                 const SizedBox(width: 6),
@@ -581,7 +601,7 @@ class _HomeScreenState extends State<HomeScreen> {
             child: TextField(
               decoration: InputDecoration(
                 hintText:
-                    'Tìm tên, số nhà (389), kiệt, ghi chú (a râu, B&H)...',
+                    'Tìm tên, mã account, số nhà (389), ghi chú (a râu)...',
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: _searchQuery.isNotEmpty
                     ? IconButton(
@@ -665,10 +685,10 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 _buildStatusFilterChip(-1, 'Tất cả (${_allData.length})'),
                 _buildStatusFilterChip(0, 'Chưa thu'),
+                _buildStatusFilterChip(2, 'Đã gạch nợ cước'),
                 _buildStatusFilterChip(3, 'Đã gạch chưa thu'),
                 _buildStatusFilterChip(4, 'Hẹn lại'),
-                _buildStatusFilterChip(1, 'Đã thu TM ($soDaThu)'),
-                _buildStatusFilterChip(2, 'Đã CK'),
+                _buildStatusFilterChip(1, 'Đã thu TM ($soDaThuTienMat)'),
               ],
             ),
           ),
@@ -685,8 +705,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   )
                 : ListView.builder(
                     itemCount: _filteredData.length,
+                    addAutomaticKeepAlives: false,
                     itemBuilder: (ctx, idx) {
                       final item = _filteredData[idx];
+                      final String maTb = (item['ma_tb'] ?? '').toString();
                       final int st = item['trang_thai'] ?? 0;
                       final String chan = (item['du_kien_chan'] ?? '')
                           .toString();
@@ -698,7 +720,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           horizontal: 10,
                           vertical: 5,
                         ),
-                        elevation: 2,
+                        elevation: 0,
                         child: Padding(
                           padding: const EdgeInsets.all(10),
                           child: Column(
@@ -718,7 +740,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ),
                                   ),
                                   Text(
-                                    currencyFmt.format(item['ton_cuoc'] ?? 0),
+                                    item['_formatted_ton_cuoc'] as String,
                                     style: const TextStyle(
                                       fontSize: 17,
                                       fontWeight: FontWeight.w900,
@@ -727,7 +749,53 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 4),
+                              const SizedBox(height: 6),
+
+                              // NÚT SAO CHÉP NHANH MÃ ACCOUNT KHÁCH HÀNG
+                              Tooltip(
+                                message: 'Chạm để sao chép mã Account',
+                                child: InkWell(
+                                  onTap: () => _copyAccount(maTb),
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.shade50,
+                                      borderRadius: BorderRadius.circular(6),
+                                      border: Border.all(
+                                        color: Colors.red.shade200,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(
+                                          Icons.copy,
+                                          size: 15,
+                                          color: Color(0xFFD32F2F),
+                                        ),
+                                        const SizedBox(width: 5),
+                                        Expanded(
+                                          child: Text(
+                                            'Account: $maTb',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.bold,
+                                              color: Color(0xFFD32F2F),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+                              const SizedBox(height: 6),
                               Wrap(
                                 spacing: 6,
                                 runSpacing: 4,
@@ -798,33 +866,33 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                               const SizedBox(height: 8),
                               // HÀNG NÚT BẤM TRẠNG THÁI 1 CHẠM
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 4,
                                 children: [
                                   _buildActionBtn(
-                                    item['ma_tb'],
+                                    maTb,
                                     1,
                                     st,
                                     'Tiền mặt',
                                     Colors.green,
                                   ),
                                   _buildActionBtn(
-                                    item['ma_tb'],
+                                    maTb,
                                     2,
                                     st,
-                                    'Đã CK',
+                                    'Đã gạch nợ cước',
                                     Colors.blue,
                                   ),
                                   _buildActionBtn(
-                                    item['ma_tb'],
+                                    maTb,
                                     3,
                                     st,
-                                    'Gạch nợ',
+                                    'Gạch chưa thu',
                                     Colors.orange.shade800,
                                   ),
                                   _buildActionBtn(
-                                    item['ma_tb'],
+                                    maTb,
                                     4,
                                     st,
                                     'Hẹn lại',
@@ -922,7 +990,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return InkWell(
       onTap: () => _updateStatus(maTb, isSelected ? 0 : targetStatus),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         decoration: BoxDecoration(
           color: isSelected ? color : Colors.grey.shade200,
           borderRadius: BorderRadius.circular(6),
@@ -930,7 +998,7 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Text(
           label,
           style: TextStyle(
-            fontSize: 12.5,
+            fontSize: 11.5,
             fontWeight: FontWeight.bold,
             color: isSelected ? Colors.white : Colors.black87,
           ),
