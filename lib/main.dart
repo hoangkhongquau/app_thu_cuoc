@@ -263,6 +263,109 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
+class _NoteEditResult {
+  const _NoteEditResult({required this.method, required this.note});
+
+  final String method;
+  final String note;
+}
+
+class _NoteMethodDialog extends StatefulWidget {
+  const _NoteMethodDialog({
+    required this.customerName,
+    required this.initialMethod,
+    required this.initialNote,
+  });
+
+  final String customerName;
+  final String initialMethod;
+  final String initialNote;
+
+  @override
+  State<_NoteMethodDialog> createState() => _NoteMethodDialogState();
+}
+
+class _NoteMethodDialogState extends State<_NoteMethodDialog> {
+  late final TextEditingController _noteController;
+  late String _selectedMethod;
+
+  @override
+  void initState() {
+    super.initState();
+    _noteController = TextEditingController(text: widget.initialNote);
+    _selectedMethod = widget.initialMethod;
+  }
+
+  @override
+  void dispose() {
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+        widget.customerName,
+        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Hình thức thu cố định:',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: ['TT', 'CK', 'TTT', 'IN HÓA ĐƠN', 'HD'].map((method) {
+              return ChoiceChip(
+                label: Text(method),
+                selected: _selectedMethod == method,
+                onSelected: (selected) =>
+                    setState(() => _selectedMethod = selected ? method : ''),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _noteController,
+            decoration: const InputDecoration(
+              labelText: 'Ghi chú đường đi / Nhắc nhở',
+              hintText: 'VD: Gần Thu Phượng, Ghé a râu lấy...',
+              border: OutlineInputBorder(),
+            ),
+            maxLines: 2,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            FocusScope.of(context).unfocus();
+            Navigator.of(context).pop();
+          },
+          child: const Text('Hủy'),
+        ),
+        FilledButton(
+          onPressed: () {
+            FocusScope.of(context).unfocus();
+            Navigator.of(context).pop(
+              _NoteEditResult(
+                method: _selectedMethod,
+                note: _noteController.text.trim(),
+              ),
+            );
+          },
+          child: const Text('Lưu lại'),
+        ),
+      ],
+    );
+  }
+}
+
 class _HomeScreenState extends State<HomeScreen> {
   List<Map<String, dynamic>> _allData = [];
   List<Map<String, dynamic>> _filteredData = [];
@@ -378,76 +481,24 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _editNoteAndMethod(Map<String, dynamic> item) async {
-    String selectedHt = item['hinh_thuc'] ?? '';
-    final noteCtrl = TextEditingController(text: item['ghi_chu'] ?? '');
+    final result = await showDialog<_NoteEditResult>(
+      context: context,
+      builder: (_) => _NoteMethodDialog(
+        customerName: (item['ho_ten'] ?? item['ma_tb']).toString(),
+        initialMethod: (item['hinh_thuc'] ?? '').toString(),
+        initialNote: (item['ghi_chu'] ?? '').toString(),
+      ),
+    );
+    if (result == null || !mounted) return;
 
-    try {
-      await showDialog(
-        context: context,
-        builder: (ctx) => StatefulBuilder(
-          builder: (ctx, setDialogState) => AlertDialog(
-            title: Text(
-              item['ho_ten'] ?? item['ma_tb'],
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Hình thức thu cố định:',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  children: ['TT', 'CK', 'TTT', 'IN HÓA ĐƠN', 'HD'].map((ht) {
-                    return ChoiceChip(
-                      label: Text(ht),
-                      selected: selectedHt == ht,
-                      onSelected: (val) =>
-                          setDialogState(() => selectedHt = val ? ht : ''),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: noteCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Ghi chú đường đi / Nhắc nhở',
-                    hintText: 'VD: Gần Thu Phượng, Ghé a râu lấy...',
-                    border: OutlineInputBorder(),
-                  ),
-                  maxLines: 2,
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Hủy'),
-              ),
-              FilledButton(
-                onPressed: () async {
-                  final database = await DbHelper.db;
-                  await database.update(
-                    'khach_hang',
-                    {'hinh_thuc': selectedHt, 'ghi_chu': noteCtrl.text.trim()},
-                    where: 'ma_tb = ?',
-                    whereArgs: [item['ma_tb']],
-                  );
-                  if (ctx.mounted) Navigator.pop(ctx);
-                  await _loadData();
-                },
-                child: const Text('Lưu lại'),
-              ),
-            ],
-          ),
-        ),
-      );
-    } finally {
-      noteCtrl.dispose();
-    }
+    final database = await DbHelper.db;
+    await database.update(
+      'khach_hang',
+      {'hinh_thuc': result.method, 'ghi_chu': result.note},
+      where: 'ma_tb = ?',
+      whereArgs: [item['ma_tb']],
+    );
+    await _loadData();
   }
 
   Future<void> _pickAndImportCsv() async {
